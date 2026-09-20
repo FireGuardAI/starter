@@ -1,0 +1,143 @@
+version: '3'
+
+vars:
+  ORG: FireGuardAI
+  VECTOR_STORE_DIR: "{{.ROOT_DIR}}/../fireguard-vector-store"
+  RETRIEVAL_DIR: "{{.ROOT_DIR}}/../fireguard-agent-retrieval"
+  COMPLIANCE_DIR: "{{.ROOT_DIR}}/../fireguard-agent-compliance"
+  REPORT_DIR: "{{.ROOT_DIR}}/../fireguard-agent-report"
+  INTAKE_DIR: "{{.ROOT_DIR}}/../fireguard-agent-intake"
+  API_DIR: "{{.ROOT_DIR}}/../fireguard-api"
+  FRONTEND_DIR: "{{.ROOT_DIR}}/../fireguard-frontend"
+
+tasks:
+  clone:
+    desc: "Clone all FireGuard repositories outside starter/"
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/scripts/clone-repos.ps1"
+
+  setup-env:
+    desc: "Create missing .env files from .env.example"
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/scripts/setup-env.ps1"
+
+  keys:
+    desc: "Generate missing local secrets in a temporary Docker container"
+    cmds:
+      - task: setup-env
+      - >
+        docker run --rm
+        -v "{{.ROOT_DIR}}/..:/workspace"
+        -w /workspace
+        python:3.12-alpine
+        python starter/scripts/generate-secrets.py --root /workspace
+
+  up:
+    desc: "Clone, configure, and start all services in dependency order"
+    cmds:
+      - task: clone
+      - task: setup-env
+      - task: keys
+      - task: up-vector-store
+      - task: up-retrieval
+      - task: up-compliance
+      - task: up-report
+      - task: up-intake
+      - task: up-api
+      - task: up-frontend
+      - task: health
+
+  up-vector-store:
+    internal: true
+    dir: "{{.VECTOR_STORE_DIR}}"
+    cmds:
+      - docker compose up -d --build --wait chromadb chromadb-ui
+      - docker compose --profile ingest up -d --build ingest
+      - docker compose --profile ingest wait ingest
+
+  up-retrieval:
+    internal: true
+    dir: "{{.RETRIEVAL_DIR}}"
+    cmds:
+      - docker compose up -d --build --wait
+
+  up-compliance:
+    internal: true
+    dir: "{{.COMPLIANCE_DIR}}"
+    cmds:
+      - docker compose up -d --build --wait
+
+  up-report:
+    internal: true
+    dir: "{{.REPORT_DIR}}"
+    cmds:
+      - docker compose up -d --build --wait
+
+  up-intake:
+    internal: true
+    dir: "{{.INTAKE_DIR}}"
+    cmds:
+      - docker compose up -d --build --wait
+
+  up-api:
+    internal: true
+    dir: "{{.API_DIR}}"
+    cmds:
+      - docker compose up -d --build --wait
+
+  up-frontend:
+    internal: true
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/scripts/up-repo.ps1" -RepoPath "{{.FRONTEND_DIR}}"
+
+  down:
+    desc: "Stop all FireGuard compose projects without deleting repositories"
+    cmds:
+      - task: down-repo
+        vars: { DIR: "{{.FRONTEND_DIR}}" }
+      - task: down-repo
+        vars: { DIR: "{{.API_DIR}}" }
+      - task: down-repo
+        vars: { DIR: "{{.INTAKE_DIR}}" }
+      - task: down-repo
+        vars: { DIR: "{{.REPORT_DIR}}" }
+      - task: down-repo
+        vars: { DIR: "{{.COMPLIANCE_DIR}}" }
+      - task: down-repo
+        vars: { DIR: "{{.RETRIEVAL_DIR}}" }
+      - task: down-repo
+        vars: { DIR: "{{.VECTOR_STORE_DIR}}" }
+
+  down-repo:
+    internal: true
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/scripts/down-repo.ps1" -RepoPath "{{.DIR}}"
+
+  clean:
+    desc: "Stop Docker, remove volumes/orphans, and delete cloned repos outside starter/"
+    cmds:
+      - task: clean-repo
+        vars: { DIR: "{{.FRONTEND_DIR}}" }
+      - task: clean-repo
+        vars: { DIR: "{{.API_DIR}}" }
+      - task: clean-repo
+        vars: { DIR: "{{.INTAKE_DIR}}" }
+      - task: clean-repo
+        vars: { DIR: "{{.REPORT_DIR}}" }
+      - task: clean-repo
+        vars: { DIR: "{{.COMPLIANCE_DIR}}" }
+      - task: clean-repo
+        vars: { DIR: "{{.RETRIEVAL_DIR}}" }
+      - task: clean-repo
+        vars: { DIR: "{{.VECTOR_STORE_DIR}}" }
+
+  clean-repo:
+    internal: true
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/scripts/clean-repo.ps1" -RepoPath "{{.DIR}}"
+
+  health:
+    desc: "Show container status and check every FireGuard HTTP health endpoint"
+    cmds:
+      - 'docker ps --filter "name=fireguard" --format "table {{`{{.Names}}`}}\t{{`{{.Status}}`}}\t{{`{{.Ports}}`}}"'
+      - powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/scripts/health-check.ps1"
